@@ -139,15 +139,14 @@ const normalizeSpokenUrl = (raw: string): string => {
 };
 
 const Navbar = () => (
-  <nav className="flex items-center justify-between px-6 py-4 glass sticky top-0 z-[100]">
-    <div className="flex items-center gap-2">
-      <img src="https://rabbitmarketinghouse.in/webinar/assets/kk-removebg-preview.png" alt="Bunny WebSnap Logo" className="w-8 h-8 object-contain" />
-      <span className="text-xl font-jakarta font-bold tracking-tight text-white">Bunny WebSnap</span>
+  <nav className="flex items-center justify-between gap-3 px-5 sm:px-6 py-4 glass sticky top-0 z-[100]">
+    <div className="flex items-center gap-2 min-w-0">
+      <img src="https://rabbitmarketinghouse.in/webinar/assets/kk-removebg-preview.png" alt="Bunny WebSnap Logo" className="w-8 h-8 object-contain shrink-0" />
+      <span className="text-lg sm:text-xl font-jakarta font-bold tracking-tight text-white whitespace-nowrap">Bunny WebSnap</span>
     </div>
-    {/* Removed: "How it works" and "API" menu links */}
-    <div className="flex items-center gap-4">
+    <div className="flex items-center gap-2 sm:gap-4 shrink-0">
       <div className="h-2 w-2 rounded-full bg-blue-500 animate-pulse"></div>
-      <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Legacy Full-Page Engine Active</span>
+      <span className="hidden sm:inline text-[10px] font-black text-gray-500 uppercase tracking-widest">Legacy Full-Page Engine Active</span>
     </div>
   </nav>
 );
@@ -336,15 +335,15 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#030712] text-gray-100">
+    <div className="min-h-screen flex flex-col bg-[#030712] text-gray-100 overflow-x-hidden">
       <Navbar />
 
-      <main className="flex-grow max-w-7xl mx-auto w-full px-6 py-12 relative">
-        <div className="text-center mb-16">
-          <h1 className="text-6xl md:text-8xl font-jakarta font-extrabold mb-6 tracking-tighter">
+      <main className="flex-grow max-w-7xl mx-auto w-full px-5 sm:px-6 py-10 sm:py-12 relative">
+        <div className="text-center mb-12 sm:mb-16">
+          <h1 className="text-5xl sm:text-6xl md:text-8xl font-jakarta font-extrabold mb-5 sm:mb-6 tracking-tighter">
             Full <span className="gradient-text">Vision</span>
           </h1>
-          <p className="text-gray-500 text-lg max-w-2xl mx-auto mb-10 font-medium">
+          <p className="text-gray-500 text-base sm:text-lg max-w-2xl mx-auto mb-8 sm:mb-10 font-medium">
             Professional full-page website snapshots with deep AI analysis.
           </p>
 
@@ -358,51 +357,57 @@ const App: React.FC = () => {
           )}
 
           <div className="max-w-3xl mx-auto">
-            <form onSubmit={handleFormSubmit} className="relative mb-8">
-              <input
-                type="text"
-                placeholder={
-                  voiceState === 'recording'
-                    ? 'Listening… say a website address, then tap the mic again'
-                    : voiceState === 'transcribing'
-                    ? 'Transcribing your voice…'
-                    : 'https://website.com'
-                }
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                className={`w-full bg-gray-900/50 border border-gray-800 rounded-3xl pr-8 py-6 text-xl focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/50 transition-all text-white placeholder:text-gray-700 shadow-2xl ${
-                  voiceSupported && aiEnabled ? 'pl-24' : 'pl-8'
-                }`}
-                disabled={status === AppStatus.CAPTURING || status === AppStatus.ANALYZING}
-              />
-              {voiceSupported && aiEnabled && (
-                <button
-                  type="button"
-                  onClick={toggleListening}
-                  disabled={status === AppStatus.CAPTURING || status === AppStatus.ANALYZING || voiceState === 'transcribing'}
-                  title={isListening ? 'Stop and transcribe' : 'Search by voice'}
-                  aria-label={isListening ? 'Stop and transcribe' : 'Search by voice'}
-                  className={`absolute left-4 top-4 bottom-4 w-14 flex items-center justify-center rounded-2xl transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
-                    isListening
-                      ? 'bg-red-600 text-white animate-pulse'
-                      : 'bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700'
+            <form onSubmit={handleFormSubmit} className="mb-8 sm:relative">
+              <div className="relative">
+                <input
+                  type="text"
+                  inputMode="url"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  placeholder={
+                    voiceState === 'recording'
+                      ? 'Listening… tap the mic again when done'
+                      : voiceState === 'transcribing'
+                      ? 'Transcribing your voice…'
+                      : 'https://website.com'
+                  }
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  className={`w-full bg-gray-900/50 border border-gray-800 rounded-3xl py-5 sm:py-6 text-lg sm:text-xl focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/50 transition-all text-white placeholder:text-gray-700 shadow-2xl pr-6 sm:pr-52 ${
+                    voiceSupported && aiEnabled ? 'pl-20 sm:pl-24' : 'pl-6 sm:pl-8'
                   }`}
-                >
-                  <i
-                    className={`fa-solid text-lg ${
-                      voiceState === 'transcribing'
-                        ? 'fa-spinner fa-spin'
-                        : isListening
-                        ? 'fa-stop'
-                        : 'fa-microphone'
+                  disabled={status === AppStatus.CAPTURING || status === AppStatus.ANALYZING}
+                />
+                {voiceSupported && aiEnabled && (
+                  <button
+                    type="button"
+                    onClick={toggleListening}
+                    disabled={status === AppStatus.CAPTURING || status === AppStatus.ANALYZING || voiceState === 'transcribing'}
+                    title={isListening ? 'Stop and transcribe' : 'Search by voice'}
+                    aria-label={isListening ? 'Stop and transcribe' : 'Search by voice'}
+                    className={`absolute left-3 sm:left-4 top-2.5 bottom-2.5 sm:top-4 sm:bottom-4 w-12 sm:w-14 flex items-center justify-center rounded-2xl transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                      isListening
+                        ? 'bg-red-600 text-white animate-pulse'
+                        : 'bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700'
                     }`}
-                  ></i>
-                </button>
-              )}
+                  >
+                    <i
+                      className={`fa-solid text-lg ${
+                        voiceState === 'transcribing'
+                          ? 'fa-spinner fa-spin'
+                          : isListening
+                          ? 'fa-stop'
+                          : 'fa-microphone'
+                      }`}
+                    ></i>
+                  </button>
+                )}
+              </div>
               <button
                 type="submit"
                 disabled={status === AppStatus.CAPTURING || status === AppStatus.ANALYZING || !url}
-                className="absolute right-4 top-4 bottom-4 px-10 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-800 disabled:text-gray-600 rounded-2xl font-black transition-all flex items-center gap-2 text-white shadow-xl uppercase tracking-widest text-xs"
+                className="mt-3 w-full sm:mt-0 sm:w-auto sm:absolute sm:right-4 sm:top-4 sm:bottom-4 px-10 py-4 sm:py-0 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-800 disabled:text-gray-600 rounded-2xl font-black transition-all flex items-center justify-center gap-2 text-white shadow-xl uppercase tracking-widest text-xs"
               >
                 {status === AppStatus.CAPTURING || status === AppStatus.ANALYZING ? (
                   <i className="fa-solid fa-spinner fa-spin text-lg"></i>
