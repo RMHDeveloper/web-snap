@@ -1,0 +1,6 @@
+{
+  "name": "Bunny WebSnap",
+  "description": "A professional-grade website screenshot and AI analysis tool that captures live web pages and provides intelligent design and content insights using Gemini.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
