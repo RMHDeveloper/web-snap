@@ -357,7 +357,7 @@ const App: React.FC = () => {
           )}
 
           <div className="max-w-3xl mx-auto">
-            <form onSubmit={handleFormSubmit} className="mb-8 sm:relative">
+            <form onSubmit={handleFormSubmit} className="mb-8">
               <div className="relative">
                 <input
                   type="text"
@@ -374,7 +374,7 @@ const App: React.FC = () => {
                   }
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
-                  className={`w-full bg-gray-900/50 border border-gray-800 rounded-3xl py-5 sm:py-6 text-lg sm:text-xl focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/50 transition-all text-white placeholder:text-gray-700 shadow-2xl pr-6 sm:pr-52 ${
+                  className={`w-full bg-gray-900/50 border border-gray-800 rounded-3xl py-5 sm:py-6 text-lg sm:text-xl focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/50 transition-all text-white placeholder:text-gray-700 shadow-2xl pr-6 ${
                     voiceSupported && aiEnabled ? 'pl-20 sm:pl-24' : 'pl-6 sm:pl-8'
                   }`}
                   disabled={status === AppStatus.CAPTURING || status === AppStatus.ANALYZING}
@@ -407,7 +407,7 @@ const App: React.FC = () => {
               <button
                 type="submit"
                 disabled={status === AppStatus.CAPTURING || status === AppStatus.ANALYZING || !url}
-                className="mt-3 w-full sm:mt-0 sm:w-auto sm:absolute sm:right-4 sm:top-4 sm:bottom-4 px-10 py-4 sm:py-0 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-800 disabled:text-gray-600 rounded-2xl font-black transition-all flex items-center justify-center gap-2 text-white shadow-xl uppercase tracking-widest text-xs"
+                className="mt-4 w-full px-10 py-4 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-800 disabled:text-gray-600 rounded-2xl font-black transition-all flex items-center justify-center gap-2 text-white shadow-xl uppercase tracking-widest text-xs"
               >
                 {status === AppStatus.CAPTURING || status === AppStatus.ANALYZING ? (
                   <i className="fa-solid fa-spinner fa-spin text-lg"></i>
