@@ -1,7 +1,142 @@
 
 import React, { useState, useRef } from 'react';
-import { AppStatus, ScreenshotData, DeviceType, DEVICE_CONFIGS } from './types';
-import { analyzeScreenshot } from './services/geminiService';
+import { AppStatus, ScreenshotData } from './types';
+import { analyzeScreenshot, transcribeSpokenUrl } from './services/geminiService';
+
+const AudioCtxImpl: typeof AudioContext | undefined =
+  typeof window !== 'undefined'
+    ? window.AudioContext || (window as any).webkitAudioContext
+    : undefined;
+
+// Can this browser capture microphone audio? (Used for voice-to-URL input.)
+const voiceSupported =
+  typeof window !== 'undefined' && !!navigator.mediaDevices?.getUserMedia && !!AudioCtxImpl;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const blobToBase64 = (blob: Blob): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+
+// Screenshot providers, tried in order. Both are free/keyless, return full-page
+// PNGs, and send permissive CORS headers so the browser can read the bytes.
+const SHOT_PROVIDERS: { name: string; build: (target: string) => string; attempts: number }[] = [
+  {
+    name: 'Microlink',
+    build: (t) =>
+      `https://api.microlink.io/?url=${encodeURIComponent(t)}` +
+      `&screenshot=true&fullPage=true&meta=false&embed=screenshot.url`,
+    attempts: 2,
+  },
+  {
+    name: 'thum.io',
+    build: (t) => `https://image.thum.io/get/viewport/1440x900/width/1440/fullpage/true/${t}`,
+    attempts: 3,
+  },
+];
+
+// Fetch with a hard timeout so a hanging provider can't stall the whole chain.
+const fetchWithTimeout = async (url: string, ms: number): Promise<Response> => {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { cache: 'no-store', signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+// Try each provider until one returns a real image. Throws with the last reason.
+const fetchScreenshot = async (
+  target: string,
+): Promise<{ blob: Blob; sourceUrl: string; engine: string }> => {
+  let lastReason = 'no screenshot engine responded';
+  for (const provider of SHOT_PROVIDERS) {
+    const sourceUrl = provider.build(target);
+    for (let attempt = 1; attempt <= provider.attempts; attempt++) {
+      try {
+        const res = await fetchWithTimeout(sourceUrl, 30000);
+        if (res.ok) {
+          const candidate = await res.blob();
+          if (candidate.type.startsWith('image/') && candidate.size > 4096) {
+            return { blob: candidate, sourceUrl, engine: provider.name };
+          }
+          lastReason = candidate.type.startsWith('image/')
+            ? `${provider.name} is still rendering`
+            : `${provider.name} returned an unexpected response`;
+        } else if (res.status === 429 || res.status === 403) {
+          lastReason = `${provider.name} is rate-limited right now`;
+        } else {
+          lastReason = `${provider.name} returned HTTP ${res.status}`;
+        }
+      } catch (e: any) {
+        if (e?.name === 'AbortError') {
+          lastReason = `${provider.name} timed out (the site may be slow or blocking capture)`;
+          break; // retrying a timeout in the same run rarely helps — move on
+        }
+        lastReason = `could not reach ${provider.name}`;
+      }
+      if (attempt < provider.attempts) await sleep(attempt * 3000);
+    }
+  }
+  throw new Error(`Couldn't get a screenshot — ${lastReason}. Try again in a moment.`);
+};
+
+// Encode mono Float32 PCM as a 16-bit WAV — a format the Gemini API reliably accepts.
+const encodeWav = (samples: Float32Array, sampleRate: number): Blob => {
+  const dataSize = samples.length * 2;
+  const view = new DataView(new ArrayBuffer(44 + dataSize));
+  const writeStr = (off: number, s: string) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
+  };
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  view.setUint32(40, dataSize, true);
+  let off = 44;
+  for (let i = 0; i < samples.length; i++, off += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new Blob([view.buffer], { type: 'audio/wav' });
+};
+
+const SPOKEN_TLDS = [
+  'com', 'net', 'org', 'io', 'in', 'co', 'dev', 'ai', 'app', 'xyz',
+  'me', 'us', 'uk', 'gov', 'edu', 'info', 'biz', 'tv', 'store', 'online',
+];
+
+// Turn a spoken phrase ("example dot com slash pricing") into a usable URL.
+const normalizeSpokenUrl = (raw: string): string => {
+  let s = raw.toLowerCase().trim();
+  // Spoken punctuation -> symbols
+  s = s.replace(/\s*\b(dot|point)\b\s*/g, '.');
+  s = s.replace(/\s*\b(forward slash|slash)\b\s*/g, '/');
+  s = s.replace(/\s*\bcolon\b\s*/g, ':');
+  s = s.replace(/\s*\b(dash|hyphen|minus)\b\s*/g, '-');
+  s = s.replace(/\s*\bunderscore\b\s*/g, '_');
+  s = s.replace(/\s*\bat\b\s*/g, '@');
+  // "google com" (no "dot" spoken) -> "google.com"
+  s = s.replace(new RegExp(`\\s+(${SPOKEN_TLDS.join('|')})\\b`, 'g'), '.$1');
+  // Drop any remaining spaces
+  s = s.replace(/\s+/g, '');
+  // Tidy stray punctuation
+  s = s.replace(/\.{2,}/g, '.').replace(/^[.\-/:@]+/, '').replace(/[.\-/:,@]+$/, '');
+  return s;
+};
 
 const Navbar = () => (
   <nav className="flex items-center justify-between px-6 py-4 glass sticky top-0 z-[100]">
@@ -25,11 +160,115 @@ const Footer = () => (
 
 const App: React.FC = () => {
   const [url, setUrl] = useState('');
-  const [device, setDevice] = useState<DeviceType>('desktop'); // Default and only device type is desktop
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ScreenshotData & { dimensions?: { w: number, h: number } } | null>(null);
+  const [voiceState, setVoiceState] = useState<'idle' | 'recording' | 'transcribing'>('idle');
   const imgRef = useRef<HTMLImageElement>(null);
+  const objectUrlRef = useRef<string | null>(null);
+  const voiceSessionRef = useRef<{
+    ctx: AudioContext;
+    stream: MediaStream;
+    processor: ScriptProcessorNode;
+    source: MediaStreamAudioSourceNode;
+    sink: GainNode;
+    chunks: Float32Array[];
+  } | null>(null);
+  const isListening = voiceState === 'recording';
+
+  const teardownVoiceSession = () => {
+    const s = voiceSessionRef.current;
+    if (!s) return;
+    try { s.processor.disconnect(); } catch { /* noop */ }
+    try { s.source.disconnect(); } catch { /* noop */ }
+    try { s.sink.disconnect(); } catch { /* noop */ }
+    s.stream.getTracks().forEach((t) => t.stop());
+    void s.ctx.close();
+    voiceSessionRef.current = null;
+  };
+
+  const startRecording = async () => {
+    if (!window.isSecureContext || !AudioCtxImpl) {
+      setError('Voice input needs a secure page. Open the app via localhost (or HTTPS), not the network IP.');
+      return;
+    }
+    setError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const ctx = new AudioCtxImpl();
+      if (ctx.state === 'suspended') await ctx.resume();
+      const source = ctx.createMediaStreamSource(stream);
+      const processor = ctx.createScriptProcessor(4096, 1, 1);
+      const sink = ctx.createGain();
+      sink.gain.value = 0; // route to output silently so onaudioprocess fires
+      const chunks: Float32Array[] = [];
+      processor.onaudioprocess = (e) => {
+        chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+      };
+      source.connect(processor);
+      processor.connect(sink);
+      sink.connect(ctx.destination);
+      voiceSessionRef.current = { ctx, stream, processor, source, sink, chunks };
+      setVoiceState('recording');
+    } catch (err: any) {
+      console.error(err);
+      if (err?.name === 'NotAllowedError' || err?.name === 'SecurityError') {
+        setError('Microphone access was blocked. Allow the mic permission for this site, then try again.');
+      } else if (err?.name === 'NotFoundError') {
+        setError('No microphone was found. Connect a mic and try again.');
+      } else {
+        setError(err?.message || 'Could not start the microphone.');
+      }
+      setVoiceState('idle');
+    }
+  };
+
+  const stopAndTranscribe = async () => {
+    const session = voiceSessionRef.current;
+    if (!session) {
+      setVoiceState('idle');
+      return;
+    }
+    const { chunks } = session;
+    const sampleRate = session.ctx.sampleRate;
+    teardownVoiceSession();
+
+    const total = chunks.reduce((n, c) => n + c.length, 0);
+    if (total < sampleRate * 0.4) {
+      setVoiceState('idle');
+      setError('That was too short — hold on and speak the address, then tap the mic again.');
+      return;
+    }
+    const merged = new Float32Array(total);
+    let offset = 0;
+    for (const c of chunks) {
+      merged.set(c, offset);
+      offset += c.length;
+    }
+
+    setVoiceState('transcribing');
+    try {
+      const base64 = await blobToBase64(encodeWav(merged, sampleRate));
+      const raw = await transcribeSpokenUrl(base64, 'audio/wav');
+      const cleaned = normalizeSpokenUrl(raw);
+      if (cleaned) setUrl(cleaned);
+      else setError('Could not make out a website address. Please try again.');
+    } catch (err: any) {
+      console.error(err);
+      setError(err?.message || 'Voice transcription failed. Please try again.');
+    } finally {
+      setVoiceState('idle');
+    }
+  };
+
+  const toggleListening = () => {
+    if (voiceState === 'transcribing') return;
+    if (voiceState === 'recording') {
+      stopAndTranscribe();
+      return;
+    }
+    startRecording();
+  };
 
   const handleImageLoad = () => {
     if (imgRef.current && result) {
@@ -43,7 +282,7 @@ const App: React.FC = () => {
     }
   };
 
-  const initiateCapture = async (targetUrl: string, targetDevice: DeviceType) => {
+  const initiateCapture = async (targetUrl: string) => {
     if (!targetUrl) return;
 
     let formattedUrl = targetUrl.trim();
@@ -56,37 +295,32 @@ const App: React.FC = () => {
       setError(null);
       setResult(null);
 
-      const noCacheParam = 'noCache'; // Thum.io caches by default, adding this ensures fresh capture
-      const config = DEVICE_CONFIGS.desktop; // Always use desktop config now
-      
-      // For desktop, use a specific width and fullpage capture
-      const imageUrl = `https://image.thum.io/get/width/${config.width}/fullpage/true/${noCacheParam}/${formattedUrl}`;
-      
-      // Introduce a 5-second delay to allow for full page load and lazy-loaded content
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      const { blob, sourceUrl, engine } = await fetchScreenshot(formattedUrl);
 
       setStatus(AppStatus.ANALYZING);
-      
-      // Analyze with Gemini
-      // Note: We fetch the image and convert to base64 so Gemini can see it
-      const imgRes = await fetch(imageUrl);
-      if (!imgRes.ok) throw new Error('Failed to fetch the screenshot from the engine.');
-      
-      const blob = await imgRes.blob();
-      const base64ImageUrl = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.readAsDataURL(blob);
-      });
 
-      const analysis = await analyzeScreenshot(base64ImageUrl);
+      // Data URL for Gemini; object URL for on-screen display (no re-fetch).
+      const base64ImageUrl = `data:${blob.type};base64,${await blobToBase64(blob)}`;
+      const objectUrl = URL.createObjectURL(blob);
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+      objectUrlRef.current = objectUrl;
+
+      let analysis;
+      try {
+        analysis = await analyzeScreenshot(base64ImageUrl);
+      } catch (e) {
+        console.error('Analysis failed:', e);
+        // Still show the screenshot even if the AI step fails.
+      }
 
       setResult({
         url: formattedUrl,
-        imageUrl,
+        imageUrl: objectUrl,
+        sourceUrl,
+        engine,
         timestamp: new Date().toLocaleTimeString(),
-        device: targetDevice, // Will always be 'desktop'
-        analysis
+        device: 'desktop',
+        analysis,
       });
       setStatus(AppStatus.SUCCESS);
     } catch (err: any) {
@@ -98,15 +332,7 @@ const App: React.FC = () => {
 
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    initiateCapture(url, device);
-  };
-
-  // Simplified handler since there's only one device option
-  const handleDeviceButtonClick = (selectedDevice: DeviceType) => {
-    setDevice(selectedDevice); 
-    if (url && status !== AppStatus.CAPTURING && status !== AppStatus.ANALYZING) {
-      initiateCapture(url, selectedDevice);
-    }
+    initiateCapture(url);
   };
 
   return (
@@ -126,12 +352,42 @@ const App: React.FC = () => {
             <form onSubmit={handleFormSubmit} className="relative mb-8">
               <input
                 type="text"
-                placeholder="https://website.com"
+                placeholder={
+                  voiceState === 'recording'
+                    ? 'Listening… say a website address, then tap the mic again'
+                    : voiceState === 'transcribing'
+                    ? 'Transcribing your voice…'
+                    : 'https://website.com'
+                }
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                className="w-full bg-gray-900/50 border border-gray-800 rounded-3xl px-8 py-6 text-xl focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/50 transition-all text-white placeholder:text-gray-700 shadow-2xl"
+                className="w-full bg-gray-900/50 border border-gray-800 rounded-3xl pl-24 pr-8 py-6 text-xl focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/50 transition-all text-white placeholder:text-gray-700 shadow-2xl"
                 disabled={status === AppStatus.CAPTURING || status === AppStatus.ANALYZING}
               />
+              {voiceSupported && (
+                <button
+                  type="button"
+                  onClick={toggleListening}
+                  disabled={status === AppStatus.CAPTURING || status === AppStatus.ANALYZING || voiceState === 'transcribing'}
+                  title={isListening ? 'Stop and transcribe' : 'Search by voice'}
+                  aria-label={isListening ? 'Stop and transcribe' : 'Search by voice'}
+                  className={`absolute left-4 top-4 bottom-4 w-14 flex items-center justify-center rounded-2xl transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                    isListening
+                      ? 'bg-red-600 text-white animate-pulse'
+                      : 'bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700'
+                  }`}
+                >
+                  <i
+                    className={`fa-solid text-lg ${
+                      voiceState === 'transcribing'
+                        ? 'fa-spinner fa-spin'
+                        : isListening
+                        ? 'fa-stop'
+                        : 'fa-microphone'
+                    }`}
+                  ></i>
+                </button>
+              )}
               <button
                 type="submit"
                 disabled={status === AppStatus.CAPTURING || status === AppStatus.ANALYZING || !url}
@@ -145,24 +401,15 @@ const App: React.FC = () => {
               </button>
             </form>
 
-            <div className="flex justify-center items-center gap-4">
-              <div className="flex bg-gray-900/80 p-1.5 rounded-2xl border border-gray-800">
-                {/* Only render desktop button */}
-                {(['desktop'] as DeviceType[]).map((key) => (
-                  <button
-                    key={key}
-                    onClick={() => handleDeviceButtonClick(key)}
-                    disabled={status === AppStatus.CAPTURING || status === AppStatus.ANALYZING}
-                    className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
-                      device === key ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'
-                    }`}
-                  >
-                    <i className={`fa-solid ${DEVICE_CONFIGS[key].icon} mr-2`}></i>
-                    {key}
-                  </button>
-                ))}
+            {voiceState !== 'idle' && (
+              <div className="flex justify-center mb-6">
+                <span className={`inline-flex items-center gap-2 text-[11px] font-black uppercase tracking-widest ${isListening ? 'text-red-400' : 'text-blue-400'}`}>
+                  <span className={`h-2 w-2 rounded-full animate-pulse ${isListening ? 'bg-red-500' : 'bg-blue-500'}`}></span>
+                  {isListening ? 'Listening — tap the mic when done' : 'Transcribing your voice…'}
+                </span>
               </div>
-            </div>
+            )}
+
           </div>
 
           {error && (
@@ -212,13 +459,16 @@ const App: React.FC = () => {
                     <span className="text-xs font-mono text-gray-500 ml-4 truncate max-w-md">{result.url}</span>
                   </div>
                   <div className="flex items-center gap-4">
+                    <span className="text-[10px] font-black text-gray-500 bg-gray-500/5 px-3 py-1.5 rounded-lg border border-gray-500/10 uppercase hidden sm:inline">
+                      via {result.engine}
+                    </span>
                     {result.dimensions && (
                       <span className="text-[10px] font-black text-blue-400 bg-blue-400/5 px-3 py-1.5 rounded-lg border border-blue-400/10 uppercase">
                         {result.dimensions.h}PX Height
                       </span>
                     )}
-                    <a href={result.imageUrl} target="_blank" rel="noreferrer" className="text-white hover:text-blue-400 transition-colors" title="Download Full Screenshot">
-                      <i className="fa-solid fa-download"></i>
+                    <a href={result.sourceUrl} target="_blank" rel="noreferrer" className="text-white hover:text-blue-400 transition-colors" title="Open full screenshot in a new tab">
+                      <i className="fa-solid fa-up-right-from-square"></i>
                     </a>
                   </div>
                 </div>
@@ -226,12 +476,12 @@ const App: React.FC = () => {
                 {/* FULL IMAGE RENDER - NO INTERNAL SCROLLBAR */}
                 {/* Adjusted padding-top to account for sticky header and removed min-h-screen */}
                 <div className="bg-black flex justify-center px-6 md:px-12 pt-[72px] pb-6 md:pb-12">
-                  <img 
+                  <img
                     ref={imgRef}
-                    src={result.imageUrl} 
-                    alt={`Screenshot of ${result.url}`} 
+                    src={result.imageUrl}
+                    alt={`Screenshot of ${result.url}`}
                     onLoad={handleImageLoad}
-                    className="h-auto block shadow-[0_0_50px_rgba(0,0,0,0.5)] rounded-2xl w-full" // Simplified class since only desktop is shown
+                    className="h-auto block shadow-[0_0_50px_rgba(0,0,0,0.5)] rounded-2xl w-full"
                   />
                 </div>
               </div>

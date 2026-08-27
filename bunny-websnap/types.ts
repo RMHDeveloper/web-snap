@@ -10,7 +10,9 @@ export interface AnalysisResult {
 
 export interface ScreenshotData {
   url: string;
-  imageUrl: string;
+  imageUrl: string;       // local object URL for display (the bytes we analysed)
+  sourceUrl: string;      // remote screenshot URL, for "open original"
+  engine: string;         // which screenshot provider succeeded
   timestamp: string;
   device: DeviceType;
   analysis?: AnalysisResult;
