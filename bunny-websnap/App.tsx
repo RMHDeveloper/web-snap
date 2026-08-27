@@ -1,7 +1,7 @@
 
 import React, { useState, useRef } from 'react';
 import { AppStatus, ScreenshotData } from './types';
-import { analyzeScreenshot, transcribeSpokenUrl } from './services/geminiService';
+import { analyzeScreenshot, transcribeSpokenUrl, aiEnabled } from './services/geminiService';
 
 const AudioCtxImpl: typeof AudioContext | undefined =
   typeof window !== 'undefined'
@@ -348,6 +348,15 @@ const App: React.FC = () => {
             Professional full-page website snapshots with deep AI analysis.
           </p>
 
+          {!aiEnabled && (
+            <div className="max-w-2xl mx-auto mb-10 -mt-4">
+              <div className="inline-flex items-center gap-3 bg-amber-500/10 border border-amber-500/20 px-5 py-3 rounded-2xl text-amber-400 font-bold text-xs">
+                <i className="fa-solid fa-circle-info"></i>
+                AI analysis &amp; voice input are off — set GEMINI_API_KEY for this deployment. Screenshots still work.
+              </div>
+            </div>
+          )}
+
           <div className="max-w-3xl mx-auto">
             <form onSubmit={handleFormSubmit} className="relative mb-8">
               <input
@@ -361,10 +370,12 @@ const App: React.FC = () => {
                 }
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                className="w-full bg-gray-900/50 border border-gray-800 rounded-3xl pl-24 pr-8 py-6 text-xl focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/50 transition-all text-white placeholder:text-gray-700 shadow-2xl"
+                className={`w-full bg-gray-900/50 border border-gray-800 rounded-3xl pr-8 py-6 text-xl focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/50 transition-all text-white placeholder:text-gray-700 shadow-2xl ${
+                  voiceSupported && aiEnabled ? 'pl-24' : 'pl-8'
+                }`}
                 disabled={status === AppStatus.CAPTURING || status === AppStatus.ANALYZING}
               />
-              {voiceSupported && (
+              {voiceSupported && aiEnabled && (
                 <button
                   type="button"
                   onClick={toggleListening}

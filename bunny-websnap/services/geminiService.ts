@@ -2,7 +2,23 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { AnalysisResult } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const API_KEY = process.env.API_KEY || process.env.GEMINI_API_KEY;
+
+// Lazily create the client so a missing key doesn't crash the whole app at
+// import time — the UI still loads, and only the AI features report the problem.
+let _ai: GoogleGenAI | null = null;
+function getAi(): GoogleGenAI {
+  if (!API_KEY) {
+    throw new Error(
+      'AI features are unavailable: GEMINI_API_KEY is not set for this deployment.',
+    );
+  }
+  if (!_ai) _ai = new GoogleGenAI({ apiKey: API_KEY });
+  return _ai;
+}
+
+/** Whether AI-powered features (voice input, screenshot analysis) can run. */
+export const aiEnabled = !!API_KEY;
 
 /**
  * Transcribe a short spoken website address from recorded audio.
@@ -10,7 +26,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
  * (which is blocked in some Chromium builds, e.g. Brave).
  */
 export async function transcribeSpokenUrl(base64Audio: string, mimeType: string): Promise<string> {
-  const response = await ai.models.generateContent({
+  const response = await getAi().models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: {
       parts: [
@@ -34,7 +50,7 @@ export async function analyzeScreenshot(imageUrl: string): Promise<AnalysisResul
   // Convert data URL to base64 parts
   const base64Data = imageUrl.split(',')[1];
   
-  const response = await ai.models.generateContent({
+  const response = await getAi().models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: {
       parts: [
