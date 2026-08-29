@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "installCommand": "cd bunny-websnap && npm install",
+  "installCommand": "npm install && cd bunny-websnap && npm install",
   "buildCommand": "cd bunny-websnap && npm run build",
   "outputDirectory": "bunny-websnap/dist"
 }

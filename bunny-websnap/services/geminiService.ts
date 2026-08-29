@@ -1,96 +1,55 @@
-
-import { GoogleGenAI, Type } from "@google/genai";
 import { AnalysisResult } from "../types";
 
-const API_KEY = process.env.API_KEY || process.env.GEMINI_API_KEY;
+// All Gemini calls go through our own serverless functions (/api/*), so the
+// API key stays on the server and is never exposed in the browser bundle.
 
-// Lazily create the client so a missing key doesn't crash the whole app at
-// import time — the UI still loads, and only the AI features report the problem.
-let _ai: GoogleGenAI | null = null;
-function getAi(): GoogleGenAI {
-  if (!API_KEY) {
-    throw new Error(
-      'AI features are unavailable: GEMINI_API_KEY is not set for this deployment.',
-    );
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((data as any)?.error || `Request to ${path} failed (${res.status})`);
   }
-  if (!_ai) _ai = new GoogleGenAI({ apiKey: API_KEY });
-  return _ai;
+  return data as T;
 }
 
-/** Whether AI-powered features (voice input, screenshot analysis) can run. */
-export const aiEnabled = !!API_KEY;
+/**
+ * Ask the server whether AI-powered features (voice input, screenshot analysis)
+ * are available for this deployment. Defaults to `false` if the check fails.
+ */
+export async function fetchAiEnabled(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/health', { cache: 'no-store' });
+    if (!res.ok) return false;
+    const data = await res.json();
+    return !!data?.aiEnabled;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Transcribe a short spoken website address from recorded audio.
- * Uses Gemini directly, so it does not depend on the browser's online speech service
- * (which is blocked in some Chromium builds, e.g. Brave).
+ * `base64Audio` is the raw base64 payload (no `data:` prefix).
  */
 export async function transcribeSpokenUrl(base64Audio: string, mimeType: string): Promise<string> {
-  const response = await getAi().models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: {
-      parts: [
-        { inlineData: { mimeType, data: base64Audio } },
-        {
-          text:
-            'The audio contains a person saying a website address. ' +
-            'Return ONLY the address as a bare domain or URL, lowercase, no spaces, no surrounding quotes or punctuation. ' +
-            'Convert spoken words like "dot", "slash", "dash" to the matching symbols. ' +
-            'Example outputs: "snapchat.com", "www.google.com", "example.com/pricing". ' +
-            'If you cannot make out an address, return an empty string.',
-        },
-      ],
-    },
+  const { text } = await postJson<{ text: string }>('/api/transcribe', {
+    audioBase64: base64Audio,
+    mimeType,
   });
-
-  return (response.text || '').trim();
+  return (text || '').trim();
 }
 
+/** Analyze a screenshot. `imageUrl` is a `data:` URL. */
 export async function analyzeScreenshot(imageUrl: string): Promise<AnalysisResult> {
-  // Convert data URL to base64 parts
-  const base64Data = imageUrl.split(',')[1];
-  
-  const response = await getAi().models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: {
-      parts: [
-        {
-          inlineData: {
-            mimeType: 'image/png',
-            data: base64Data,
-          },
-        },
-        {
-          text: "Analyze this website screenshot. Provide a summary, identify main colors (hex), layout type, UX/UI score (1-100), key UX improvement suggestions, and a guess of the tech stack used based on visual patterns.",
-        }
-      ]
-    },
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          summary: { type: Type.STRING },
-          colors: { 
-            type: Type.ARRAY, 
-            items: { type: Type.STRING } 
-          },
-          layoutType: { type: Type.STRING },
-          uiScore: { type: Type.NUMBER },
-          uxSuggestions: { 
-            type: Type.ARRAY, 
-            items: { type: Type.STRING } 
-          },
-          techStackGuess: { 
-            type: Type.ARRAY, 
-            items: { type: Type.STRING } 
-          },
-        },
-        required: ["summary", "colors", "layoutType", "uiScore", "uxSuggestions", "techStackGuess"]
-      }
-    }
+  const commaIdx = imageUrl.indexOf(',');
+  const imageBase64 = commaIdx >= 0 ? imageUrl.slice(commaIdx + 1) : imageUrl;
+  const mimeMatch = /^data:([^;,]+)[;,]/.exec(imageUrl);
+  return postJson<AnalysisResult>('/api/analyze', {
+    imageBase64,
+    mimeType: mimeMatch?.[1] || 'image/png',
   });
-
-  const result = JSON.parse(response.text || '{}');
-  return result as AnalysisResult;
 }

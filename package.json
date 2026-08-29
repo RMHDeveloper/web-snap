@@ -1,0 +1,8 @@
+{
+  "name": "web-snap-api",
+  "private": true,
+  "description": "Serverless API functions for Bunny WebSnap (keeps the Gemini key server-side).",
+  "dependencies": {
+    "@google/genai": "^1.38.0"
+  }
+}

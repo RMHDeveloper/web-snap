@@ -1,7 +1,7 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { AppStatus, ScreenshotData } from './types';
-import { analyzeScreenshot, transcribeSpokenUrl, aiEnabled } from './services/geminiService';
+import { analyzeScreenshot, transcribeSpokenUrl, fetchAiEnabled } from './services/geminiService';
 
 const AudioCtxImpl: typeof AudioContext | undefined =
   typeof window !== 'undefined'
@@ -163,6 +163,8 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ScreenshotData & { dimensions?: { w: number, h: number } } | null>(null);
   const [voiceState, setVoiceState] = useState<'idle' | 'recording' | 'transcribing'>('idle');
+  // Assume AI is on until the server tells us otherwise, so the UI doesn't flicker.
+  const [aiEnabled, setAiEnabled] = useState(true);
   const imgRef = useRef<HTMLImageElement>(null);
   const objectUrlRef = useRef<string | null>(null);
   const voiceSessionRef = useRef<{
@@ -174,6 +176,16 @@ const App: React.FC = () => {
     chunks: Float32Array[];
   } | null>(null);
   const isListening = voiceState === 'recording';
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchAiEnabled().then((enabled) => {
+      if (!cancelled) setAiEnabled(enabled);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const teardownVoiceSession = () => {
     const s = voiceSessionRef.current;
@@ -351,7 +363,7 @@ const App: React.FC = () => {
             <div className="max-w-2xl mx-auto mb-10 -mt-4">
               <div className="inline-flex items-center gap-3 bg-amber-500/10 border border-amber-500/20 px-5 py-3 rounded-2xl text-amber-400 font-bold text-xs">
                 <i className="fa-solid fa-circle-info"></i>
-                AI analysis &amp; voice input are off — set GEMINI_API_KEY for this deployment. Screenshots still work.
+                AI analysis &amp; voice input are off — set GEMINI_API_KEY in the deployment&apos;s environment variables. Screenshots still work.
               </div>
             </div>
           )}
