@@ -16,6 +16,18 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return data as T;
 }
 
+/**
+ * Transcribe a short spoken website address from recorded audio.
+ * `base64Audio` is the raw base64 payload (no `data:` prefix).
+ */
+export async function transcribeSpokenUrl(base64Audio: string, mimeType: string): Promise<string> {
+  const { text } = await postJson<{ text: string }>('/api/transcribe', {
+    audioBase64: base64Audio,
+    mimeType,
+  });
+  return (text || '').trim();
+}
+
 /** Analyze a screenshot. `imageUrl` is a `data:` URL. */
 export async function analyzeScreenshot(imageUrl: string): Promise<AnalysisResult> {
   const commaIdx = imageUrl.indexOf(',');

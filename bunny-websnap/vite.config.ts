@@ -15,6 +15,7 @@ function devApi(env: Record<string, string>): Plugin {
       }
       const routes: Record<string, string> = {
         '/api/analyze': '../api/analyze.ts',
+        '/api/transcribe': '../api/transcribe.ts',
       };
       server.middlewares.use(async (req, res, next) => {
         const pathname = (req.url || '').split('?')[0];

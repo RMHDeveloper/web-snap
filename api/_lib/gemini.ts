@@ -4,6 +4,32 @@ import { GoogleGenAI, Type } from '@google/genai';
 
 const MODEL = 'gemini-3-flash-preview';
 
+/**
+ * Transcribe a short spoken website address from recorded audio.
+ * Uses Gemini directly, so it does not depend on the browser's online speech service
+ * (which is blocked in some Chromium builds, e.g. Brave).
+ */
+export async function transcribeSpokenUrl(base64Audio: string, mimeType: string): Promise<string> {
+  const response = await client().models.generateContent({
+    model: MODEL,
+    contents: {
+      parts: [
+        { inlineData: { mimeType, data: base64Audio } },
+        {
+          text:
+            'The audio contains a person saying a website address. ' +
+            'Return ONLY the address as a bare domain or URL, lowercase, no spaces, no surrounding quotes or punctuation. ' +
+            'Convert spoken words like "dot", "slash", "dash" to the matching symbols. ' +
+            'Example outputs: "snapchat.com", "www.google.com", "example.com/pricing". ' +
+            'If you cannot make out an address, return an empty string.',
+        },
+      ],
+    },
+  });
+
+  return (response.text || '').trim();
+}
+
 function client(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
   if (!apiKey) {
