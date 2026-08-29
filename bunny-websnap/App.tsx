@@ -1,7 +1,7 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { AppStatus, ScreenshotData } from './types';
-import { analyzeScreenshot, fetchAiEnabled } from './services/geminiService';
+import { analyzeScreenshot } from './services/geminiService';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -101,20 +101,9 @@ const App: React.FC = () => {
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ScreenshotData & { dimensions?: { w: number, h: number } } | null>(null);
-  // Assume AI is on until the server tells us otherwise, so the UI doesn't flicker.
-  const [aiEnabled, setAiEnabled] = useState(true);
+  const [analysisNote, setAnalysisNote] = useState<string | null>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const objectUrlRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchAiEnabled().then((enabled) => {
-      if (!cancelled) setAiEnabled(enabled);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const handleImageLoad = () => {
     if (imgRef.current && result) {
@@ -139,6 +128,7 @@ const App: React.FC = () => {
     try {
       setStatus(AppStatus.CAPTURING);
       setError(null);
+      setAnalysisNote(null);
       setResult(null);
 
       const { blob, sourceUrl, engine } = await fetchScreenshot(formattedUrl);
@@ -154,9 +144,10 @@ const App: React.FC = () => {
       let analysis;
       try {
         analysis = await analyzeScreenshot(base64ImageUrl);
-      } catch (e) {
+      } catch (e: any) {
         console.error('Analysis failed:', e);
         // Still show the screenshot even if the AI step fails.
+        setAnalysisNote(e?.message || 'AI analysis is unavailable right now.');
       }
 
       setResult({
@@ -193,15 +184,6 @@ const App: React.FC = () => {
           <p className="text-gray-500 text-base sm:text-lg max-w-2xl mx-auto mb-8 sm:mb-10 font-medium">
             Professional full-page website snapshots with deep AI analysis.
           </p>
-
-          {!aiEnabled && (
-            <div className="max-w-2xl mx-auto mb-10 -mt-4">
-              <div className="inline-flex items-center gap-3 bg-amber-500/10 border border-amber-500/20 px-5 py-3 rounded-2xl text-amber-400 font-bold text-xs">
-                <i className="fa-solid fa-circle-info"></i>
-                AI analysis is off — set GEMINI_API_KEY in the deployment&apos;s environment variables. Screenshots still work.
-              </div>
-            </div>
-          )}
 
           <div className="max-w-3xl mx-auto">
             <form onSubmit={handleFormSubmit} className="mb-8">
@@ -310,6 +292,12 @@ const App: React.FC = () => {
 
             {/* Sticky Analysis Sidebar */}
             <div className="lg:w-1/3 w-full flex flex-col gap-6 lg:sticky lg:top-32 pb-24">
+              {!result.analysis && analysisNote && (
+                <div className="glass p-6 rounded-2xl border border-gray-800 shadow-xl text-gray-500 text-xs font-medium flex items-start gap-3">
+                  <i className="fa-solid fa-circle-info mt-0.5"></i>
+                  <span>{analysisNote}</span>
+                </div>
+              )}
               {result.analysis && (
                 <>
                   <div className="glass p-10 rounded-[2.5rem] border-l-[6px] border-blue-600 shadow-2xl">

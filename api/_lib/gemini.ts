@@ -4,11 +4,6 @@ import { GoogleGenAI, Type } from '@google/genai';
 
 const MODEL = 'gemini-3-flash-preview';
 
-/** Whether the deployment has a Gemini key configured. */
-export function aiConfigured(): boolean {
-  return !!(process.env.GEMINI_API_KEY || process.env.API_KEY);
-}
-
 function client(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
   if (!apiKey) {

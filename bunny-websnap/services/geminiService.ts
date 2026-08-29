@@ -16,21 +16,6 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return data as T;
 }
 
-/**
- * Ask the server whether AI-powered screenshot analysis is available for this
- * deployment. Defaults to `false` if the check fails.
- */
-export async function fetchAiEnabled(): Promise<boolean> {
-  try {
-    const res = await fetch('/api/health', { cache: 'no-store' });
-    if (!res.ok) return false;
-    const data = await res.json();
-    return !!data?.aiEnabled;
-  } catch {
-    return false;
-  }
-}
-
 /** Analyze a screenshot. `imageUrl` is a `data:` URL. */
 export async function analyzeScreenshot(imageUrl: string): Promise<AnalysisResult> {
   const commaIdx = imageUrl.indexOf(',');
