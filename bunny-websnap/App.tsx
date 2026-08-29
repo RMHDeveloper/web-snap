@@ -1,16 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { AppStatus, ScreenshotData } from './types';
-import { analyzeScreenshot, transcribeSpokenUrl, fetchAiEnabled } from './services/geminiService';
-
-const AudioCtxImpl: typeof AudioContext | undefined =
-  typeof window !== 'undefined'
-    ? window.AudioContext || (window as any).webkitAudioContext
-    : undefined;
-
-// Can this browser capture microphone audio? (Used for voice-to-URL input.)
-const voiceSupported =
-  typeof window !== 'undefined' && !!navigator.mediaDevices?.getUserMedia && !!AudioCtxImpl;
+import { analyzeScreenshot, fetchAiEnabled } from './services/geminiService';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -86,58 +77,6 @@ const fetchScreenshot = async (
   throw new Error(`Couldn't get a screenshot — ${lastReason}. Try again in a moment.`);
 };
 
-// Encode mono Float32 PCM as a 16-bit WAV — a format the Gemini API reliably accepts.
-const encodeWav = (samples: Float32Array, sampleRate: number): Blob => {
-  const dataSize = samples.length * 2;
-  const view = new DataView(new ArrayBuffer(44 + dataSize));
-  const writeStr = (off: number, s: string) => {
-    for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
-  };
-  writeStr(0, 'RIFF');
-  view.setUint32(4, 36 + dataSize, true);
-  writeStr(8, 'WAVE');
-  writeStr(12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true); // PCM
-  view.setUint16(22, 1, true); // mono
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  writeStr(36, 'data');
-  view.setUint32(40, dataSize, true);
-  let off = 44;
-  for (let i = 0; i < samples.length; i++, off += 2) {
-    const s = Math.max(-1, Math.min(1, samples[i]));
-    view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-  }
-  return new Blob([view.buffer], { type: 'audio/wav' });
-};
-
-const SPOKEN_TLDS = [
-  'com', 'net', 'org', 'io', 'in', 'co', 'dev', 'ai', 'app', 'xyz',
-  'me', 'us', 'uk', 'gov', 'edu', 'info', 'biz', 'tv', 'store', 'online',
-];
-
-// Turn a spoken phrase ("example dot com slash pricing") into a usable URL.
-const normalizeSpokenUrl = (raw: string): string => {
-  let s = raw.toLowerCase().trim();
-  // Spoken punctuation -> symbols
-  s = s.replace(/\s*\b(dot|point)\b\s*/g, '.');
-  s = s.replace(/\s*\b(forward slash|slash)\b\s*/g, '/');
-  s = s.replace(/\s*\bcolon\b\s*/g, ':');
-  s = s.replace(/\s*\b(dash|hyphen|minus)\b\s*/g, '-');
-  s = s.replace(/\s*\bunderscore\b\s*/g, '_');
-  s = s.replace(/\s*\bat\b\s*/g, '@');
-  // "google com" (no "dot" spoken) -> "google.com"
-  s = s.replace(new RegExp(`\\s+(${SPOKEN_TLDS.join('|')})\\b`, 'g'), '.$1');
-  // Drop any remaining spaces
-  s = s.replace(/\s+/g, '');
-  // Tidy stray punctuation
-  s = s.replace(/\.{2,}/g, '.').replace(/^[.\-/:@]+/, '').replace(/[.\-/:,@]+$/, '');
-  return s;
-};
-
 const Navbar = () => (
   <nav className="flex items-center justify-between gap-3 px-5 sm:px-6 py-4 glass sticky top-0 z-[100]">
     <div className="flex items-center gap-2 min-w-0">
@@ -162,20 +101,10 @@ const App: React.FC = () => {
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ScreenshotData & { dimensions?: { w: number, h: number } } | null>(null);
-  const [voiceState, setVoiceState] = useState<'idle' | 'recording' | 'transcribing'>('idle');
   // Assume AI is on until the server tells us otherwise, so the UI doesn't flicker.
   const [aiEnabled, setAiEnabled] = useState(true);
   const imgRef = useRef<HTMLImageElement>(null);
   const objectUrlRef = useRef<string | null>(null);
-  const voiceSessionRef = useRef<{
-    ctx: AudioContext;
-    stream: MediaStream;
-    processor: ScriptProcessorNode;
-    source: MediaStreamAudioSourceNode;
-    sink: GainNode;
-    chunks: Float32Array[];
-  } | null>(null);
-  const isListening = voiceState === 'recording';
 
   useEffect(() => {
     let cancelled = false;
@@ -186,100 +115,6 @@ const App: React.FC = () => {
       cancelled = true;
     };
   }, []);
-
-  const teardownVoiceSession = () => {
-    const s = voiceSessionRef.current;
-    if (!s) return;
-    try { s.processor.disconnect(); } catch { /* noop */ }
-    try { s.source.disconnect(); } catch { /* noop */ }
-    try { s.sink.disconnect(); } catch { /* noop */ }
-    s.stream.getTracks().forEach((t) => t.stop());
-    void s.ctx.close();
-    voiceSessionRef.current = null;
-  };
-
-  const startRecording = async () => {
-    if (!window.isSecureContext || !AudioCtxImpl) {
-      setError('Voice input needs a secure page. Open the app via localhost (or HTTPS), not the network IP.');
-      return;
-    }
-    setError(null);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const ctx = new AudioCtxImpl();
-      if (ctx.state === 'suspended') await ctx.resume();
-      const source = ctx.createMediaStreamSource(stream);
-      const processor = ctx.createScriptProcessor(4096, 1, 1);
-      const sink = ctx.createGain();
-      sink.gain.value = 0; // route to output silently so onaudioprocess fires
-      const chunks: Float32Array[] = [];
-      processor.onaudioprocess = (e) => {
-        chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-      };
-      source.connect(processor);
-      processor.connect(sink);
-      sink.connect(ctx.destination);
-      voiceSessionRef.current = { ctx, stream, processor, source, sink, chunks };
-      setVoiceState('recording');
-    } catch (err: any) {
-      console.error(err);
-      if (err?.name === 'NotAllowedError' || err?.name === 'SecurityError') {
-        setError('Microphone access was blocked. Allow the mic permission for this site, then try again.');
-      } else if (err?.name === 'NotFoundError') {
-        setError('No microphone was found. Connect a mic and try again.');
-      } else {
-        setError(err?.message || 'Could not start the microphone.');
-      }
-      setVoiceState('idle');
-    }
-  };
-
-  const stopAndTranscribe = async () => {
-    const session = voiceSessionRef.current;
-    if (!session) {
-      setVoiceState('idle');
-      return;
-    }
-    const { chunks } = session;
-    const sampleRate = session.ctx.sampleRate;
-    teardownVoiceSession();
-
-    const total = chunks.reduce((n, c) => n + c.length, 0);
-    if (total < sampleRate * 0.4) {
-      setVoiceState('idle');
-      setError('That was too short — hold on and speak the address, then tap the mic again.');
-      return;
-    }
-    const merged = new Float32Array(total);
-    let offset = 0;
-    for (const c of chunks) {
-      merged.set(c, offset);
-      offset += c.length;
-    }
-
-    setVoiceState('transcribing');
-    try {
-      const base64 = await blobToBase64(encodeWav(merged, sampleRate));
-      const raw = await transcribeSpokenUrl(base64, 'audio/wav');
-      const cleaned = normalizeSpokenUrl(raw);
-      if (cleaned) setUrl(cleaned);
-      else setError('Could not make out a website address. Please try again.');
-    } catch (err: any) {
-      console.error(err);
-      setError(err?.message || 'Voice transcription failed. Please try again.');
-    } finally {
-      setVoiceState('idle');
-    }
-  };
-
-  const toggleListening = () => {
-    if (voiceState === 'transcribing') return;
-    if (voiceState === 'recording') {
-      stopAndTranscribe();
-      return;
-    }
-    startRecording();
-  };
 
   const handleImageLoad = () => {
     if (imgRef.current && result) {
@@ -363,7 +198,7 @@ const App: React.FC = () => {
             <div className="max-w-2xl mx-auto mb-10 -mt-4">
               <div className="inline-flex items-center gap-3 bg-amber-500/10 border border-amber-500/20 px-5 py-3 rounded-2xl text-amber-400 font-bold text-xs">
                 <i className="fa-solid fa-circle-info"></i>
-                AI analysis &amp; voice input are off — set GEMINI_API_KEY in the deployment&apos;s environment variables. Screenshots still work.
+                AI analysis is off — set GEMINI_API_KEY in the deployment&apos;s environment variables. Screenshots still work.
               </div>
             </div>
           )}
@@ -377,44 +212,12 @@ const App: React.FC = () => {
                   autoCapitalize="none"
                   autoCorrect="off"
                   spellCheck={false}
-                  placeholder={
-                    voiceState === 'recording'
-                      ? 'Listening… tap the mic again when done'
-                      : voiceState === 'transcribing'
-                      ? 'Transcribing your voice…'
-                      : 'https://website.com'
-                  }
+                  placeholder="https://website.com"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
-                  className={`w-full bg-gray-900/50 border border-gray-800 rounded-3xl py-5 sm:py-6 text-lg sm:text-xl focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/50 transition-all text-white placeholder:text-gray-700 shadow-2xl pr-6 ${
-                    voiceSupported && aiEnabled ? 'pl-20 sm:pl-24' : 'pl-6 sm:pl-8'
-                  }`}
+                  className="w-full bg-gray-900/50 border border-gray-800 rounded-3xl py-5 sm:py-6 text-lg sm:text-xl focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/50 transition-all text-white placeholder:text-gray-700 shadow-2xl pr-6 pl-6 sm:pl-8"
                   disabled={status === AppStatus.CAPTURING || status === AppStatus.ANALYZING}
                 />
-                {voiceSupported && aiEnabled && (
-                  <button
-                    type="button"
-                    onClick={toggleListening}
-                    disabled={status === AppStatus.CAPTURING || status === AppStatus.ANALYZING || voiceState === 'transcribing'}
-                    title={isListening ? 'Stop and transcribe' : 'Search by voice'}
-                    aria-label={isListening ? 'Stop and transcribe' : 'Search by voice'}
-                    className={`absolute left-3 sm:left-4 top-2.5 bottom-2.5 sm:top-4 sm:bottom-4 w-12 sm:w-14 flex items-center justify-center rounded-2xl transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
-                      isListening
-                        ? 'bg-red-600 text-white animate-pulse'
-                        : 'bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700'
-                    }`}
-                  >
-                    <i
-                      className={`fa-solid text-lg ${
-                        voiceState === 'transcribing'
-                          ? 'fa-spinner fa-spin'
-                          : isListening
-                          ? 'fa-stop'
-                          : 'fa-microphone'
-                      }`}
-                    ></i>
-                  </button>
-                )}
               </div>
               <button
                 type="submit"
@@ -428,16 +231,6 @@ const App: React.FC = () => {
                 )}
               </button>
             </form>
-
-            {voiceState !== 'idle' && (
-              <div className="flex justify-center mb-6">
-                <span className={`inline-flex items-center gap-2 text-[11px] font-black uppercase tracking-widest ${isListening ? 'text-red-400' : 'text-blue-400'}`}>
-                  <span className={`h-2 w-2 rounded-full animate-pulse ${isListening ? 'bg-red-500' : 'bg-blue-500'}`}></span>
-                  {isListening ? 'Listening — tap the mic when done' : 'Transcribing your voice…'}
-                </span>
-              </div>
-            )}
-
           </div>
 
           {error && (
@@ -464,7 +257,7 @@ const App: React.FC = () => {
                 {status === AppStatus.CAPTURING ? 'Rendering Full Page...' : 'Analyzing Captured Page...'}
               </h2>
               <p className="text-gray-600 text-sm mt-2">
-                {status === AppStatus.CAPTURING 
+                {status === AppStatus.CAPTURING
                   ? 'This may take up to 15 seconds for long or complex pages.'
                   : <>Note: Full page captures may sometimes show only the initial content if the target website uses lazy loading extensively.<br />The AI will analyze the visible content.</>}
               </p>
@@ -500,7 +293,7 @@ const App: React.FC = () => {
                     </a>
                   </div>
                 </div>
-                
+
                 {/* FULL IMAGE RENDER - NO INTERNAL SCROLLBAR */}
                 {/* Adjusted padding-top to account for sticky header and removed min-h-screen */}
                 <div className="bg-black flex justify-center px-6 md:px-12 pt-[72px] pb-6 md:pb-12">
