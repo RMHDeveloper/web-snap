@@ -10,8 +10,11 @@ function devApi(env: Record<string, string>): Plugin {
     apply: 'serve',
     configureServer(server) {
       // The functions read process.env; mirror .env.local into it for dev.
-      if (env.GEMINI_API_KEY && !process.env.GEMINI_API_KEY) {
-        process.env.GEMINI_API_KEY = env.GEMINI_API_KEY;
+      if (env.DASHBOARD_PROXY_URL && !process.env.DASHBOARD_PROXY_URL) {
+        process.env.DASHBOARD_PROXY_URL = env.DASHBOARD_PROXY_URL;
+      }
+      if (env.DASHBOARD_PROXY_SECRET && !process.env.DASHBOARD_PROXY_SECRET) {
+        process.env.DASHBOARD_PROXY_SECRET = env.DASHBOARD_PROXY_SECRET;
       }
       const routes: Record<string, string> = {
         '/api/analyze': '../api/analyze.ts',

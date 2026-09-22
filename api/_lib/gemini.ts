@@ -1,16 +1,59 @@
-// Server-side Gemini calls. The API key lives only here (as an environment
-// variable) and is never shipped to the browser.
-import { GoogleGenAI, Type } from '@google/genai';
+// Server-side calls to the shared dashboard proxy. The proxy holds the real
+// Gemini API key; this app never sees it. Only DASHBOARD_PROXY_URL and
+// DASHBOARD_PROXY_SECRET (both server-side env vars) live here.
 
 const MODEL = 'gemini-3-flash-preview';
 
+// JSON Schema `type` enum values matching the Gemini REST API's Type enum
+// (previously imported from `@google/genai`'s `Type`).
+const SchemaType = {
+  OBJECT: 'OBJECT',
+  ARRAY: 'ARRAY',
+  STRING: 'STRING',
+  NUMBER: 'NUMBER',
+} as const;
+
+interface ProxyResponse {
+  candidates?: { content?: { parts?: { text?: string }[] } }[];
+}
+
+async function callProxy(body: Record<string, unknown>): Promise<ProxyResponse> {
+  const proxyUrl = process.env.DASHBOARD_PROXY_URL;
+  const proxySecret = process.env.DASHBOARD_PROXY_SECRET;
+  if (!proxyUrl || !proxySecret) {
+    throw new Error(
+      'AI features are unavailable: DASHBOARD_PROXY_URL / DASHBOARD_PROXY_SECRET are not set for this deployment.',
+    );
+  }
+
+  const response = await fetch(`${proxyUrl}/api/proxy/web-snap`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-proxy-secret': proxySecret,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`Dashboard proxy request failed (${response.status}): ${detail}`);
+  }
+
+  return response.json();
+}
+
+function textFromResponse(data: ProxyResponse): string {
+  return data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+}
+
 /**
  * Transcribe a short spoken website address from recorded audio.
- * Uses Gemini directly, so it does not depend on the browser's online speech service
- * (which is blocked in some Chromium builds, e.g. Brave).
+ * Uses Gemini (via the dashboard proxy), so it does not depend on the browser's
+ * online speech service (which is blocked in some Chromium builds, e.g. Brave).
  */
 export async function transcribeSpokenUrl(base64Audio: string, mimeType: string): Promise<string> {
-  const response = await client().models.generateContent({
+  const data = await callProxy({
     model: MODEL,
     contents: {
       parts: [
@@ -27,15 +70,7 @@ export async function transcribeSpokenUrl(base64Audio: string, mimeType: string)
     },
   });
 
-  return (response.text || '').trim();
-}
-
-function client(): GoogleGenAI {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
-  if (!apiKey) {
-    throw new Error('AI features are unavailable: GEMINI_API_KEY is not set for this deployment.');
-  }
-  return new GoogleGenAI({ apiKey });
+  return textFromResponse(data).trim();
 }
 
 export interface AnalysisResult {
@@ -51,7 +86,7 @@ export async function analyzeScreenshot(
   base64Image: string,
   mimeType = 'image/png',
 ): Promise<AnalysisResult> {
-  const response = await client().models.generateContent({
+  const data = await callProxy({
     model: MODEL,
     contents: {
       parts: [
@@ -61,22 +96,22 @@ export async function analyzeScreenshot(
         },
       ],
     },
-    config: {
+    generationConfig: {
       responseMimeType: 'application/json',
       responseSchema: {
-        type: Type.OBJECT,
+        type: SchemaType.OBJECT,
         properties: {
-          summary: { type: Type.STRING },
-          colors: { type: Type.ARRAY, items: { type: Type.STRING } },
-          layoutType: { type: Type.STRING },
-          uiScore: { type: Type.NUMBER },
-          uxSuggestions: { type: Type.ARRAY, items: { type: Type.STRING } },
-          techStackGuess: { type: Type.ARRAY, items: { type: Type.STRING } },
+          summary: { type: SchemaType.STRING },
+          colors: { type: SchemaType.ARRAY, items: { type: SchemaType.STRING } },
+          layoutType: { type: SchemaType.STRING },
+          uiScore: { type: SchemaType.NUMBER },
+          uxSuggestions: { type: SchemaType.ARRAY, items: { type: SchemaType.STRING } },
+          techStackGuess: { type: SchemaType.ARRAY, items: { type: SchemaType.STRING } },
         },
         required: ['summary', 'colors', 'layoutType', 'uiScore', 'uxSuggestions', 'techStackGuess'],
       },
     },
   });
 
-  return JSON.parse(response.text || '{}') as AnalysisResult;
+  return JSON.parse(textFromResponse(data) || '{}') as AnalysisResult;
 }

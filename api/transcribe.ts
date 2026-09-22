@@ -16,6 +16,6 @@ export default async function handler(req: any, res: any): Promise<void> {
     sendJson(res, 200, { text });
   } catch (err: any) {
     const message = err?.message || 'Transcription failed';
-    sendError(res, /GEMINI_API_KEY/.test(message) ? 503 : 502, message);
+    sendError(res, /DASHBOARD_PROXY_(URL|SECRET)/.test(message) ? 503 : 502, message);
   }
 }
